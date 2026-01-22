@@ -158,5 +158,6 @@ DEFAULT_AUTO_FIELD = 'django.db.models.BigAutoField'
 
 CELERY_BROKER_URL = os.getenv("REDIS_URL")
 CELERY_RESULT_BACKEND = os.getenv("REDIS_URL")
+CELERY_BROKER_CONNECTION_RETRY_ON_STARTUP = True
 
 TEST_RUNNER = "django.test.runner.DiscoverRunner"
