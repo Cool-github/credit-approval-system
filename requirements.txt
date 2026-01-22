@@ -7,3 +7,5 @@ pandas==2.2.0
 openpyxl==3.1.2
 gunicorn==21.2.0
 python-dotenv==1.0.1
+python-dateutil==2.9.0
+drf-spectacular==0.27.2

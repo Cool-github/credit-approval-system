@@ -1,15 +1,16 @@
-from django.shortcuts import render
+from datetime import date
 
-# Create your views here.
+from dateutil.relativedelta import relativedelta
 from rest_framework.views import APIView
 from rest_framework.response import Response
 from rest_framework import status
 
 from apps.customers.models import Customer
 from apps.loans.models import Loan
+
 from services.limit_calculator import calculate_approved_limit
 from services.eligibility import evaluate_loan
-from services.emi_calculator import calculate_emi
+from drf_spectacular.utils import extend_schema, OpenApiExample
 
 from .serializers import (
     RegisterSerializer,
@@ -17,18 +18,38 @@ from .serializers import (
     LoanCreateSerializer
 )
 
+@extend_schema(
+    request=RegisterSerializer,
+    examples=[
+        OpenApiExample(
+            "Register Example",
+            value={
+                "first_name": "John",
+                "last_name": "Doe",
+                "age": 28,
+                "monthly_income": 50000,
+                "phone_number": "9999999999"
+            },
+            request_only=True
+        )
+    ]
+)
 
 # POST /register
 class RegisterView(APIView):
     def post(self, request):
         serializer = RegisterSerializer(data=request.data)
         serializer.is_valid(raise_exception=True)
-
         data = serializer.validated_data
+
         approved_limit = calculate_approved_limit(data["monthly_income"])
 
+        # Safe customer_id generation (no collision with ingested data)
+        last_customer = Customer.objects.order_by("-customer_id").first()
+        new_customer_id = last_customer.customer_id + 1 if last_customer else 1
+
         customer = Customer.objects.create(
-            customer_id=Customer.objects.count() + 1,
+            customer_id=new_customer_id,
             first_name=data["first_name"],
             last_name=data["last_name"],
             age=data["age"],
@@ -47,6 +68,21 @@ class RegisterView(APIView):
             "phone_number": customer.phone_number
         }, status=status.HTTP_201_CREATED)
 
+@extend_schema(
+    request=EligibilitySerializer,
+    examples=[
+        OpenApiExample(
+            "Eligibility Example",
+            value={
+                "customer_id": 1,
+                "loan_amount": 500000,
+                "interest_rate": 10,
+                "tenure": 24
+            },
+            request_only=True
+        )
+    ]
+)
 
 # POST /check-eligibility
 class CheckEligibilityView(APIView):
@@ -71,11 +107,29 @@ class CheckEligibilityView(APIView):
             "customer_id": customer.customer_id,
             "approval": result["approval"],
             "interest_rate": data["interest_rate"],
-            "corrected_interest_rate": result.get("corrected_interest_rate", data["interest_rate"]),
+            "corrected_interest_rate": result.get(
+                "corrected_interest_rate",
+                data["interest_rate"]
+            ),
             "tenure": data["tenure"],
             "monthly_installment": result.get("monthly_installment", 0)
         })
 
+@extend_schema(
+    request=LoanCreateSerializer,
+    examples=[
+        OpenApiExample(
+            "Create Loan Example",
+            value={
+                "customer_id": 1,
+                "loan_amount": 500000,
+                "interest_rate": 10,
+                "tenure": 24
+            },
+            request_only=True
+        )
+    ]
+)
 
 # POST /create-loan
 class CreateLoanView(APIView):
@@ -89,7 +143,12 @@ class CreateLoanView(APIView):
         except Customer.DoesNotExist:
             return Response({"error": "Customer not found"}, status=404)
 
-        result = evaluate_loan(customer, data["loan_amount"], data["interest_rate"], data["tenure"])
+        result = evaluate_loan(
+            customer,
+            data["loan_amount"],
+            data["interest_rate"],
+            data["tenure"]
+        )
 
         if not result["approval"]:
             return Response({
@@ -100,17 +159,24 @@ class CreateLoanView(APIView):
                 "monthly_installment": 0
             }, status=400)
 
-        # create loan
+        # Safe loan_id generation (no collision with ingested data)
+        last_loan = Loan.objects.order_by("-loan_id").first()
+        new_loan_id = last_loan.loan_id + 1 if last_loan else 1000
+
+        # Real start and end dates based on tenure
+        start_date = date.today()
+        end_date = start_date + relativedelta(months=data["tenure"])
+
         loan = Loan.objects.create(
-            loan_id=Loan.objects.count() + 1000,
+            loan_id=new_loan_id,
             customer=customer,
             loan_amount=data["loan_amount"],
             tenure=data["tenure"],
             interest_rate=result["corrected_interest_rate"],
             monthly_installment=result["monthly_installment"],
             emis_paid_on_time=0,
-            start_date="2026-01-01",
-            end_date="2026-12-31"
+            start_date=start_date,
+            end_date=end_date
         )
 
         return Response({
